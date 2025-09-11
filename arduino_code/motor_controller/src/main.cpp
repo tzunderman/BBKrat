@@ -26,16 +26,16 @@ void setup()
   pinMode(11, OUTPUT);
   pinMode(12, OUTPUT);
 
-  // Stop Timer/Counter1
-  TCCR1A = 0;  // Timer/Counter1 Control Register A
-  TCCR1B = 0;  // Timer/Counter1 Control Register B
-  TIMSK1 = 0;  // Timer/Counter1 Interrupt Mask Register
-  // Stop Timer/Counter4
-  TCCR4A = 0;  // Timer/Counter4 Control Register A
-  TCCR4B = 0;  // Timer/Counter4 Control Register B
-  TIMSK4 = 0;  // Timer/Counter4 Interrupt Mask Register
+  // Stop the Timer/Counter by resetting the control registers
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCCR4A = 0;
+  TCCR4B = 0;
+  // Timer/Counter Interrupt Mask Register
+  TIMSK1 = 0;
+  TIMSK4 = 0;
 
-  // Set Timer/Counter1 to Waveform Generation Mode 8:
+  // Set Timer/Counter to Waveform Generation Mode 8:
   // Phase and Frequency correct PWM with TOP set by ICR1
   TCCR1B |= _BV(WGM13);  // WGM=8
   TCCR1A |= _BV(COM1A1);  // Normal PWM on Pin 11
@@ -44,18 +44,19 @@ void setup()
   TCCR4A |= _BV(COM4A1);  // Normal PWM on Pin 6
   TCCR4A |= _BV(COM4B1) | _BV(COM4B0); // Inverted PWM on Pin 7
 
+  // Maximal count value
   ICR1 = TOP;
   ICR4 = TOP;
-  // Difference between OCR1A and OCR1B is Dead Time
-  OCR1A = (TOP / 2) - 1;
-  OCR1B = (TOP / 2) + 1;
-  OCR4A = (TOP / 2) - 1;
-  OCR4B = (TOP / 2) + 1;
 
-  // Start timer by setting the clock-select bits to non-zero
-  // TODO uncomment the following lines to start them
-  TCCR1B |= _BV(CS10); // prescale = 1
-  TCCR4B |= _BV(CS40); // prescale = 1
+  // Trigger points (should be between 0 and TOP)
+  OCR1A = (TOP / 2);
+  OCR1B = (TOP / 2);
+  OCR4A = (TOP / 2);
+  OCR4B = (TOP / 2);
+
+  // Start timer by setting the clock-select bits to non-zero (prescale = 1)
+  TCCR1B |= _BV(CS10);
+  TCCR4B |= _BV(CS40);
 }
 
 void loop() {
@@ -63,18 +64,23 @@ void loop() {
   // Wait for the other bytes to arrive if not the case
   while (Serial.available() >= 3) {
     // Read until the message delimiter
-    String line = Serial.readStringUntil('\n');
+    uint8_t buf[4];
+    uint8_t number_of_bytes = Serial.readBytesUntil(0, buf, 4);
+
     // Ignore the message if it contains more than three bytes
-    if (line.length() != 3) {
+    if (number_of_bytes != 2) {
       break;
     }
 
     // Calculate the new count values for the received duty cycles
-    OCR1A = (uint16_t) ((float) TOP * (float) line[0] / 100.0) - 1;
-    OCR1B = (uint16_t) ((float) TOP * (float) line[0] / 100.0) + 1;
-    OCR4A = (uint16_t) ((float) TOP * (float) line[1] / 100.0) - 1;
-    OCR4B = (uint16_t) ((float) TOP * (float) line[1] / 100.0) + 1;
-    // Serial.println((float) line[0]);
-    // Serial.println(((float) TOP * (float) line[0] / 100.0));
+    OCR1A = (uint16_t) ((float) TOP * (float) buf[0] / 255.0);
+    OCR1B = (uint16_t) ((float) TOP * (float) buf[0] / 255.0);
+    OCR4A = (uint16_t) ((float) TOP * (float) buf[1] / 255.0);
+    OCR4B = (uint16_t) ((float) TOP * (float) buf[1] / 255.0);
+    
+    // Send the calculated values back to the pi
+    Serial.print(((float) TOP * (float) buf[0] / 255.0));
+    Serial.print(" ");
+    Serial.println(((float) TOP * (float) buf[1] / 255.0));
   }
 }
