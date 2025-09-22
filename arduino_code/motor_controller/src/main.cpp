@@ -12,6 +12,9 @@ const unsigned TOP = 160;
 // frequency =  16MHz / 320
 // frequency = 50,000
 
+unsigned long timeout_millis = millis();
+unsigned long timeout_python = 100;
+
 void setup()
 {
   Serial.begin(115200);
@@ -53,10 +56,6 @@ void setup()
   OCR1B = (TOP / 2);
   OCR4A = (TOP / 2);
   OCR4B = (TOP / 2);
-
-  // Start timer by setting the clock-select bits to non-zero (prescale = 1)
-  TCCR1B |= _BV(CS10);
-  TCCR4B |= _BV(CS40);
 }
 
 void loop() {
@@ -82,5 +81,19 @@ void loop() {
     Serial.print(((float) TOP * (float) buf[0] / 255.0));
     Serial.print(" ");
     Serial.println(((float) TOP * (float) buf[1] / 255.0));
+
+    // Reset the timeout
+    timeout_millis = millis();
+  }
+
+  // Disable the timers if no message has been received for timeout_python milliseconds
+  if (millis() - timeout_millis > timeout_python) {
+    TCCR1B &= ~_BV(CS10);
+    TCCR4B &= ~_BV(CS40);
+  }
+  else {
+    // Start timer by setting the clock-select bits to non-zero (prescale = 1)
+    TCCR1B |= _BV(CS10);
+    TCCR4B |= _BV(CS40);
   }
 }
