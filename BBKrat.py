@@ -3,27 +3,25 @@ import pygame
 import serial
 import serial.tools.list_ports as stlp
 
-# ---------------- Constants ----------------
-
+# ---------------- Constants ----------------=
 # Axes
 AXIS_L_STICK_X = 0
 AXIS_L_STICK_Y = 1
 AXIS_R_STICK_X = 3
 AXIS_R_STICK_Y = 4
 
-# # Shoulder buttons
+# Shoulder buttons
 BTN_SHOULDER_UP = 5
 BTN_SHOULDER_DOWN = 4
-# # D-pad buttons
+# D-pad buttons
 HAT_DPAD_Y = 1
 
-
-#Demo mode to see which button index of the controller is what.
+# Demo mode to see which button index of the controller is what.
 BTN_INDEX_DEMO_MODE = False
 # Print mode to print data in the terminal instead of sending it to an Arduino
 PRINT_MODE = False
-# ---------------- Initial variable values ----------------
 
+# ---------------- Initial variable values ----------------
 # Max power
 max_power = 20  # 20% start
 
@@ -82,7 +80,6 @@ try:
 
 
         # ----- Process controller inputs -----
-        
         # Change max power with d-pad buttons (steps of 10%)
         if current_shoulder_up and not prev_shoulder_up or current_dpad == 1 and prev_dpad != 1:
             max_power += 10
