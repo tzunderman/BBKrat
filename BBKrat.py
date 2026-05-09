@@ -34,9 +34,32 @@ prev_dpad = 0
 pygame.init()
 pygame.joystick.init()
 
-if pygame.joystick.get_count() == 0:
-    print("No controller detected.")
-    exit()
+## ---------------- Serial connection ----------------
+ser: serial.Serial | None = None
+number_of_dots = 0
+if not PRINT_MODE:
+    print("Try to connect to an Arduino")
+    connected_arduinos = []
+    while len(connected_arduinos) == 0:
+        connected_arduinos = [port.device for port in stlp.comports() if not port.manufacturer is None and "Arduino" in port.manufacturer]
+        print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
+        number_of_dots = (number_of_dots + 1) % 4
+        time.sleep(0.5)
+        
+    port = connected_arduinos[0]
+    ser = serial.Serial(port, 115200)
+    print("Connected to an Arduino")
+    # The Arduino will restart when a connection is made, so give it some time to get
+    # ready to receive messages 
+    time.sleep(1)
+
+## ---------------- Controller connection ----------------
+print("Try to connect to a controller")
+while pygame.joystick.get_count() < 1:
+    pygame.event.pump()
+    print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
+    number_of_dots = (number_of_dots + 1) % 4
+    time.sleep(0.5)
 
 joystick = pygame.joystick.Joystick(0)
 joystick.init()
@@ -50,21 +73,6 @@ while BTN_INDEX_DEMO_MODE:
     buttons = [joystick.get_button(i) for i in range(joystick.get_numbuttons())]
     hats = [joystick.get_hat(i) for i in range(joystick.get_numhats())]
     print(f"Axes: {axes}  Buttons: {buttons}  Hats: {hats}", end='\r') 
-
-# ---------------- Serial connection ----------------
-ser: serial.Serial | None = None
-if not PRINT_MODE:
-    connected_arduinos = [port.device for port in stlp.comports() if not port.manufacturer is None and "Arduino" in port.manufacturer]
-    if len(connected_arduinos) == 0:
-        print("No Arduino connected")
-        exit()
-        
-    port = connected_arduinos[0]
-    # print(port)
-    ser = serial.Serial(port, 115200)
-    # For some reason there needs to be a delay in order for the Arduino to be
-    # ready to receive messages 
-    time.sleep(1)
 
 # ---------------- Main Loop ----------------
 try:
@@ -128,3 +136,4 @@ except Exception as e:
 if not PRINT_MODE and ser is not None:
     # Make sure to properly close the connection
     ser.close()
+
