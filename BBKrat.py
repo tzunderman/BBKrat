@@ -34,16 +34,28 @@ prev_dpad = 0
 pygame.init()
 pygame.joystick.init()
 
+## ---------------- Controller connection ----------------
+print("Try to connect to a controller")
+# number_of_dots = 0
+while pygame.joystick.get_count() < 1:
+    pygame.event.pump()
+    # print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
+    # number_of_dots = (number_of_dots + 1) % 4
+    time.sleep(0.5)
+
+joystick = pygame.joystick.Joystick(0)
+joystick.init()
+print(f"Connected to: {joystick.get_name()}")
+
 ## ---------------- Serial connection ----------------
 ser: serial.Serial | None = None
-number_of_dots = 0
 if not PRINT_MODE:
     print("Try to connect to an Arduino")
     connected_arduinos = []
     while len(connected_arduinos) == 0:
         connected_arduinos = [port.device for port in stlp.comports() if not port.manufacturer is None and "Arduino" in port.manufacturer]
-        print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
-        number_of_dots = (number_of_dots + 1) % 4
+        # print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
+        # number_of_dots = (number_of_dots + 1) % 4
         time.sleep(0.5)
         
     port = connected_arduinos[0]
@@ -52,19 +64,6 @@ if not PRINT_MODE:
     # The Arduino will restart when a connection is made, so give it some time to get
     # ready to receive messages 
     time.sleep(1)
-
-## ---------------- Controller connection ----------------
-print("Try to connect to a controller")
-while pygame.joystick.get_count() < 1:
-    pygame.event.pump()
-    print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
-    number_of_dots = (number_of_dots + 1) % 4
-    time.sleep(0.5)
-
-joystick = pygame.joystick.Joystick(0)
-joystick.init()
-print(f"Connected to: {joystick.get_name()}")
-
 
 while BTN_INDEX_DEMO_MODE:
     pygame.event.pump()
@@ -77,7 +76,10 @@ while BTN_INDEX_DEMO_MODE:
 # ---------------- Main Loop ----------------
 try:
     while True:
-        pygame.event.pump()
+        # Handle events
+        for event in pygame.event.get():
+            if event.type == pygame.JOYDEVICEREMOVED:
+                raise RuntimeError("Controller disconnected")
 
         # ----- Read controller -----
         leftStickX = joystick.get_axis(AXIS_L_STICK_X)
@@ -132,8 +134,8 @@ try:
             time.sleep(0.02)
 except Exception as e:
     print(e)
-
-if not PRINT_MODE and ser is not None:
-    # Make sure to properly close the connection
-    ser.close()
+finally:
+    if not PRINT_MODE and ser is not None:
+        # Make sure to properly close the connection
+        ser.close()
 
