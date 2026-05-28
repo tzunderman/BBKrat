@@ -1,141 +1,69 @@
+import sys
 import time
-import pygame
-import serial
-import serial.tools.list_ports as stlp
+import signal
+from queue import Empty
+from threading import Thread
+from influxdb import InfluxDBClient
 
-# ---------------- Constants ----------------=
-# Axes
-AXIS_L_STICK_X = 0
-AXIS_L_STICK_Y = 1
-AXIS_R_STICK_X = 3
-AXIS_R_STICK_Y = 4
+from controller import control, measurement_queue
 
-# Shoulder buttons
-BTN_SHOULDER_UP = 5
-BTN_SHOULDER_DOWN = 4
-# D-pad buttons
-HAT_DPAD_Y = 1
+def graceful_shutdown(signum, frame):
+    print("Caught termination signal. Exiting.")
+    sys.exit(0)
 
-# Demo mode to see which button index of the controller is what.
-BTN_INDEX_DEMO_MODE = False
-# Print mode to print data in the terminal instead of sending it to an Arduino
-PRINT_MODE = False
+signal.signal(signal.SIGTERM, graceful_shutdown)
+signal.signal(signal.SIGINT, graceful_shutdown)
 
-# ---------------- Initial variable values ----------------
-# Max power
-max_power = 20  # 20% start
+# ---------------- Grafana queue setup ----------------
+client = InfluxDBClient(
+    host='localhost',
+    port=8086,
+    database='BBKrat'
+)
 
-# # Prev button values
-prev_shoulder_up = False
-prev_shoulder_down = False
-prev_dpad = 0
 
-# ---------------- Init ----------------
-pygame.init()
-pygame.joystick.init()
+# ---------------- Thread setup ----------------
+def influx_writer():
+    batch: list[dict[str, str | int | dict[str, float]]] = []
+    MAX_BATCH = 1000
+    FLUSH_MIN = 200
+    FLUSH_MAX_LATENCY = 1.0
 
-## ---------------- Controller connection ----------------
-print("Try to connect to a controller")
-# number_of_dots = 0
-while pygame.joystick.get_count() < 1:
-    pygame.event.pump()
-    # print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
-    # number_of_dots = (number_of_dots + 1) % 4
-    time.sleep(0.5)
+    last_flush = time.monotonic()
 
-joystick = pygame.joystick.Joystick(0)
-joystick.init()
-print(f"Connected to: {joystick.get_name()}")
-
-## ---------------- Serial connection ----------------
-ser: serial.Serial | None = None
-if not PRINT_MODE:
-    print("Try to connect to an Arduino")
-    connected_arduinos = []
-    while len(connected_arduinos) == 0:
-        connected_arduinos = [port.device for port in stlp.comports() if not port.manufacturer is None and "Arduino" in port.manufacturer]
-        # print(f'{'.' * number_of_dots + ' ' * (4-number_of_dots)}' , end='\r')
-        # number_of_dots = (number_of_dots + 1) % 4
-        time.sleep(0.5)
-        
-    port = connected_arduinos[0]
-    ser = serial.Serial(port, 115200)
-    print("Connected to an Arduino")
-    # The Arduino will restart when a connection is made, so give it some time to get
-    # ready to receive messages 
-    time.sleep(1)
-
-while BTN_INDEX_DEMO_MODE:
-    pygame.event.pump()
-
-    axes = [joystick.get_axis(i) for i in range(joystick.get_numaxes())]
-    buttons = [joystick.get_button(i) for i in range(joystick.get_numbuttons())]
-    hats = [joystick.get_hat(i) for i in range(joystick.get_numhats())]
-    print(f"Axes: {axes}  Buttons: {buttons}  Hats: {hats}", end='\r') 
-
-# ---------------- Main Loop ----------------
-try:
     while True:
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.JOYDEVICEREMOVED:
-                raise RuntimeError("Controller disconnected")
+        try:
+            # Wait for at least one point
+            metric = measurement_queue.get(timeout=1)
+            batch.append(metric)
 
-        # ----- Read controller -----
-        leftStickX = joystick.get_axis(AXIS_L_STICK_X)
-        rightStickY = joystick.get_axis(AXIS_R_STICK_Y)
-        current_shoulder_up = joystick.get_button(BTN_SHOULDER_UP)
-        current_shoulder_down = joystick.get_button(BTN_SHOULDER_DOWN)
-        current_dpad = joystick.get_hat(0)[HAT_DPAD_Y]
+            # Drain whatever is available right now (catch-up mechanism)
+            while len(batch) < MAX_BATCH:
+                try:
+                    batch.append(measurement_queue.get_nowait())
+                except Empty:
+                    break
 
+            now = time.monotonic()
+            if len(batch) >= FLUSH_MIN or (now - last_flush) >= FLUSH_MAX_LATENCY:
+                client.write_points(batch, time_precision="n")
+                batch.clear()
+                last_flush = now
 
-        # ----- Process controller inputs -----
-        # Change max power with d-pad buttons (steps of 10%)
-        if current_shoulder_up and not prev_shoulder_up or current_dpad == 1 and prev_dpad != 1:
-            max_power += 10
-        if current_shoulder_down and not prev_shoulder_down or current_dpad == -1 and prev_dpad != -1:
-            max_power -= 10
+        except Empty:
+            # periodic flush even if low traffic
+            if batch:
+                client.write_points(batch, time_precision="n")
+                batch.clear()
+                last_flush = time.monotonic()
 
-        prev_shoulder_up = current_shoulder_up
-        prev_shoulder_down = current_shoulder_down
-        prev_dpad = current_dpad
+# Starting the threads
+# Thread for reading the controller, sending PWM values to the Arduino,
+# reading PWM and battery values from the Arduino queueing the
+# values to be uploaded to influxdb
+Thread(target=control, daemon=True).start()
+# Uploading the values to influxdb
+Thread(target=influx_writer, daemon=True).start()
 
-        # Clamp max power between 10% and 100%
-        max_power = max(10, min(100, max_power))
-
-        # Drive and steer signals, with max power applied, in percent
-        drive = round(-rightStickY * max_power)
-        steer = round(leftStickX * max_power)
-        
-        # Power for left and right motor (-100 to 100)
-        powerLeft = max(-100, min(100, drive + steer))
-        powerRight = max(-100, min(100, drive - steer))
-        
-        # Map -100..100 → 0..255
-        pwmLeft = max(1, round((powerLeft + 100) * 255 / 200))
-        pwmRight = max(1, round((powerRight + 100) * 255 / 200))
-
-        # ----- Communicate results to the Arduino 
-        if PRINT_MODE:
-            print(
-                f"Drive: {drive:>4}%  Steer: {steer:>4}%  MaxPower: {int(max_power):>3}%  "
-                f"PowerL: {powerLeft:>4}%  PowerR: {powerRight:>4}%  "
-                f"PWML: {pwmLeft:>5.1f}  PWMR: {pwmRight:>5.1f}",
-                end="\r"
-            )
-        elif ser is not None:
-            buf = [pwmLeft, pwmRight, 0]
-            ser.write(bytes(buf))
-            b = ser.read_until()
-            if b != b"":
-                print(b, end='\r')
-
-            # Small delay to prevent too much spamming on the serial connection
-            time.sleep(0.02)
-except Exception as e:
-    print(e)
-finally:
-    if not PRINT_MODE and ser is not None:
-        # Make sure to properly close the connection
-        ser.close()
-
+while True:
+    time.sleep(1)

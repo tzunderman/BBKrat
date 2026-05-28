@@ -1,8 +1,17 @@
 #include <Arduino.h>
+#include "battery.h"
 
-// Waves with dead time on Timer1 of an 
-// Arduino UNO (Pins 9 and 10)
-// Written January 23rd, 2023 by John Wasser
+// Analog pin config for battery voltage measurement
+#define BATTERY_VOLTAGE_PIN A8
+#define MOTOR_1_CURRENT_PIN A13
+#define MOTOR_2_CURRENT_PIN A15
+
+#define MOTOR_1_PWM_1_PIN 10
+#define MOTOR_1_PWM_2_PIN 9
+#define MOTOR_1_PWM_ENABLE_PIN 8
+#define MOTOR_2_PWM_1_PIN 4
+#define MOTOR_2_PWM_2_PIN 3
+#define MOTOR_2_PWM_ENABLE_PIN 2
 
 // frequency =  16MHz / (2 * prescaleFactor *  (TOP + 1))
 // Correction, because Phase Correct PWM is used: 
@@ -14,20 +23,33 @@ const unsigned TOP = 160;
 
 unsigned long timeout_millis = millis();
 unsigned long timeout_python = 100;
+unsigned long battery_status_period = 100;
+unsigned long last_battery_status = millis();
+unsigned long battery_status_message_period = 1000;
+unsigned long last_battery_status_message = millis();
+float battery_voltage = 0;
+float motor_1_current = 0;
+float motor_2_current = 0;
 
 void setup()
 {
   Serial.begin(115200);
   delay(200);
 
-  digitalWrite(6, LOW);
-  digitalWrite(7, LOW);
-  digitalWrite(11, LOW);
-  digitalWrite(12, LOW);
-  pinMode(6, OUTPUT);
-  pinMode(7, OUTPUT);
-  pinMode(11, OUTPUT);
-  pinMode(12, OUTPUT);
+  digitalWrite(MOTOR_1_PWM_1_PIN, LOW);
+  digitalWrite(MOTOR_1_PWM_2_PIN, LOW);
+  digitalWrite(MOTOR_1_PWM_ENABLE_PIN, HIGH);
+  digitalWrite(MOTOR_2_PWM_1_PIN, LOW);
+  digitalWrite(MOTOR_2_PWM_2_PIN, LOW);
+  digitalWrite(MOTOR_2_PWM_ENABLE_PIN, HIGH);
+  pinMode(MOTOR_1_PWM_1_PIN, OUTPUT);
+  pinMode(MOTOR_1_PWM_2_PIN, OUTPUT);
+  pinMode(MOTOR_1_PWM_ENABLE_PIN, OUTPUT);
+  pinMode(MOTOR_2_PWM_1_PIN, OUTPUT);
+  pinMode(MOTOR_2_PWM_2_PIN, OUTPUT);
+  pinMode(MOTOR_2_PWM_ENABLE_PIN, OUTPUT);
+  digitalWrite(MOTOR_1_PWM_ENABLE_PIN, HIGH);
+  digitalWrite(MOTOR_2_PWM_ENABLE_PIN, HIGH);
 
   // Stop the Timer/Counter by resetting the control registers
   TCCR1A = 0;
@@ -56,9 +78,33 @@ void setup()
   OCR1B = (TOP / 2);
   OCR4A = (TOP / 2);
   OCR4B = (TOP / 2);
+
+  battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN);
+  motor_1_current = read_current(MOTOR_1_CURRENT_PIN);
+  motor_2_current = read_current(MOTOR_2_CURRENT_PIN);
+}
+
+void send_data(float pwmL, float pwmR, float battery_voltage, float motor_1_current, float motor_2_current) {
+    Serial.print(pwmL);
+    Serial.print(" ");
+    Serial.print(pwmR);
+    Serial.print(" ");
+    Serial.print(battery_voltage);
+    Serial.print(" ");
+    Serial.print(motor_1_current);
+    Serial.print(" ");
+    Serial.println(motor_2_current);
 }
 
 void loop() {
+  // Get the voltage of the battery by reading the analog pin and calculating the total voltage
+  if (millis() - last_battery_status > battery_status_period) {
+    battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN);
+    motor_1_current = read_current(MOTOR_1_CURRENT_PIN);
+    motor_2_current = read_current(MOTOR_2_CURRENT_PIN);
+    last_battery_status = millis();
+  }
+
   // Only read if there are three or more bytes to be read (complete message)
   // Wait for the other bytes to arrive if not the case
   while (Serial.available() >= 3) {
@@ -78,22 +124,30 @@ void loop() {
     OCR4B = (uint16_t) ((float) TOP * (float) buf[1] / 255.0);
     
     // Send the calculated values back to the pi
-    Serial.print(((float) TOP * (float) buf[0] / 255.0));
-    Serial.print(" ");
-    Serial.println(((float) TOP * (float) buf[1] / 255.0));
+    send_data(((float) TOP * (float) buf[0] / 255.0), ((float) TOP * (float) buf[1] / 255.0), battery_voltage, motor_1_current, motor_2_current);
 
     // Reset the timeout
     timeout_millis = millis();
+    last_battery_status_message = timeout_millis;
+  }
+  
+  if (millis() - last_battery_status_message > battery_status_message_period) {
+    send_data(-1, -1, battery_voltage, motor_1_current, motor_2_current);
+    last_battery_status_message = millis();
   }
 
   // Disable the timers if no message has been received for timeout_python milliseconds
   if (millis() - timeout_millis > timeout_python) {
     TCCR1B &= ~_BV(CS10);
     TCCR4B &= ~_BV(CS40);
+    digitalWrite(MOTOR_1_PWM_ENABLE_PIN, HIGH);
+    digitalWrite(MOTOR_2_PWM_ENABLE_PIN, HIGH);
   }
   else {
     // Start timer by setting the clock-select bits to non-zero (prescale = 1)
     TCCR1B |= _BV(CS10);
     TCCR4B |= _BV(CS40);
+    digitalWrite(MOTOR_1_PWM_ENABLE_PIN, LOW);
+    digitalWrite(MOTOR_2_PWM_ENABLE_PIN, LOW);
   }
 }
