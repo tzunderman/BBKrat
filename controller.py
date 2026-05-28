@@ -5,7 +5,11 @@ import serial.tools.list_ports as stlp
 from queue import Queue, Full
 from threading import Thread
 
-# ---------------- Constants ----------------=
+def clamp(x, lo, hi):
+    return max(lo, min(x, hi))
+
+# ---------------- Constants -----------------
+
 # Axes
 AXIS_L_STICK_X = 0
 AXIS_L_STICK_Y = 1
@@ -15,13 +19,29 @@ AXIS_R_STICK_Y = 4
 # Shoulder buttons
 BTN_SHOULDER_UP = 5
 BTN_SHOULDER_DOWN = 4
+
 # D-pad buttons
 HAT_DPAD_Y = 1
 
+
 # Demo mode to see which button index of the controller is what.
 BTN_INDEX_DEMO_MODE = False
+
 # Print mode to print data in the terminal instead of sending it to an Arduino
 PRINT_MODE = False
+
+
+# Controller interval (s)
+DT = 0.02
+
+# Time (s) to ramp power from 0 to 100 (full forward)
+POWER_RAMP_TIME = 2.0
+
+# Maximum slew rate of power command (%/s), derived from ramp time
+POWER_SLEWRATE = 100.0 / POWER_RAMP_TIME
+
+
+
 
 measurement_queue: Queue[dict[str, str | int | dict[str, float]]] = Queue(maxsize=256)
 
@@ -75,6 +95,10 @@ def control():
         prev_shoulder_down = False
         prev_dpad = 0
 
+        #Commanded, slew-rated power per motor (from -100 to +100)
+        powerLeft = 0
+        powerRight = 0
+
         while BTN_INDEX_DEMO_MODE:
             pygame.event.pump()
 
@@ -86,7 +110,7 @@ def control():
         try:
             timestamp = 0
             while True:
-                while time.time_ns() - timestamp < 20e6:
+                while time.time_ns() - timestamp < (DT*1e6):
                     time.sleep(0.001)
 
                 timestamp = time.time_ns()
@@ -115,24 +139,35 @@ def control():
                 prev_dpad = current_dpad
 
                 # Clamp max power between 10% and 100%
-                max_power = max(10, min(100, max_power))
+                max_power = clamp(max_power, 10, 100)
 
                 # Drive and steer signals, with max power applied, in percent
                 drive = round(-rightStickY * max_power)
                 steer = round(leftStickX * max_power)
                 
                 # Power for left and right motor (-100 to 100)
-                powerLeft = max(-100, min(100, drive + steer))
-                powerRight = max(-100, min(100, drive - steer))
+                powerLeftReq = clamp(drive + steer, -100, 100)
+                powerRightReq = clamp(drive - steer, -100, 100)
+
+                # Apply a power slew rate, to gently ramp up when accelerating
+                # (Prevents broken wheel parts when quickly accelerating)
+                maxPowerInc = POWER_SLEWRATE * DT
+                powerLeft += clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc)
+                powerRight += clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc)
                 
-                # Map -100..100 → 0..255
+                # Map -100..100 → 1..255
                 pwmLeft = max(1, round((powerLeft + 100) * 255 / 200))
                 pwmRight = max(1, round((powerRight + 100) * 255 / 200))
+
+                # Final clamp to be safe
+                pwmLeft = clamp(pwmLeft, 1, 255)
+                pwmRight = clamp(pwmRight, 1, 255)
 
                 # ----- Communicate results to the Arduino -----
                 if PRINT_MODE:
                     print(
                         f"Drive: {drive:>4}%  Steer: {steer:>4}%  MaxPower: {int(max_power):>3}%  "
+                        f"PowerReqL: {powerLeftReq:>4}%  PowerReqR: {powerRightReq:>4}%  "
                         f"PowerL: {powerLeft:>4}%  PowerR: {powerRight:>4}%  "
                         f"PWML: {pwmLeft:>5.1f}  PWMR: {pwmRight:>5.1f}",
                         end="\r"
@@ -153,6 +188,8 @@ def control():
                         "maxPower": max_power,
                         "drive": drive,
                         "steer": steer,
+                        "powerLeftRequest": powerLeftReq,
+                        "powerRightRequest": powerRightReq,
                         "powerLeft": powerLeft,
                         "powerRight": powerRight,
                         "pwmLeft": pwmLeft,
