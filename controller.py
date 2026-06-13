@@ -217,7 +217,7 @@ def queue_serial_data(ser: serial.Serial):
             parts = line.split()
             
             if len(parts) >= 4:
-                print(line, end='\r')
+                # print(line, end='\r')
                 measurement_arduino: dict[str, str | int | dict[str, float]] = {
                     "measurement": "arduino",
                     "time": time.time_ns(),
