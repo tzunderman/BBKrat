@@ -30,6 +30,7 @@ unsigned long last_battery_status_message = millis();
 float battery_voltage = 0;
 float motor_1_current = 0;
 float motor_2_current = 0;
+float vref = 5.0;
 
 void setup()
 {
@@ -79,12 +80,13 @@ void setup()
   OCR4A = (TOP / 2);
   OCR4B = (TOP / 2);
 
-  battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN);
-  motor_1_current = read_current(MOTOR_1_CURRENT_PIN);
-  motor_2_current = read_current(MOTOR_2_CURRENT_PIN);
+  vref = read_vcc();
+  battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN, vref);
+  motor_1_current = read_current(MOTOR_1_CURRENT_PIN, vref);
+  motor_2_current = read_current(MOTOR_2_CURRENT_PIN, vref);
 }
 
-void send_data(float pwmL, float pwmR, float battery_voltage, float motor_1_current, float motor_2_current) {
+void send_data(float pwmL, float pwmR, float battery_voltage, float motor_1_current, float motor_2_current, float vref) {
     Serial.print(pwmL);
     Serial.print(" ");
     Serial.print(pwmR);
@@ -93,15 +95,18 @@ void send_data(float pwmL, float pwmR, float battery_voltage, float motor_1_curr
     Serial.print(" ");
     Serial.print(motor_1_current);
     Serial.print(" ");
-    Serial.println(motor_2_current);
+    Serial.print(motor_2_current);
+    Serial.print(" ");
+    Serial.println(vref);
 }
 
 void loop() {
   // Get the voltage of the battery by reading the analog pin and calculating the total voltage
   if (millis() - last_battery_status > battery_status_period) {
-    battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN);
-    motor_1_current = read_current(MOTOR_1_CURRENT_PIN);
-    motor_2_current = read_current(MOTOR_2_CURRENT_PIN);
+    vref = read_vcc();
+    battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN, vref);
+    motor_1_current = read_current(MOTOR_1_CURRENT_PIN, vref);
+    motor_2_current = read_current(MOTOR_2_CURRENT_PIN, vref);
     last_battery_status = millis();
   }
 
@@ -124,7 +129,7 @@ void loop() {
     OCR4B = (uint16_t) ((float) TOP * (float) buf[1] / 255.0);
     
     // Send the calculated values back to the pi
-    send_data(((float) TOP * (float) buf[0] / 255.0), ((float) TOP * (float) buf[1] / 255.0), battery_voltage, motor_1_current, motor_2_current);
+    send_data(((float) TOP * (float) buf[0] / 255.0), ((float) TOP * (float) buf[1] / 255.0), battery_voltage, motor_1_current, motor_2_current, vref);
 
     // Reset the timeout
     timeout_millis = millis();
@@ -132,7 +137,7 @@ void loop() {
   }
   
   if (millis() - last_battery_status_message > battery_status_message_period) {
-    send_data(-1, -1, battery_voltage, motor_1_current, motor_2_current);
+    send_data(-1, -1, battery_voltage, motor_1_current, motor_2_current, vref);
     last_battery_status_message = millis();
   }
 
