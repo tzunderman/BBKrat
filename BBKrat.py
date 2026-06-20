@@ -64,10 +64,9 @@ def influx_writer():
                         batch = batch[-MAX_BATCH_SIZE:]  # keep only the most recent points
                     
                     # Back off slightly to avoid hammering InfluxDB
-                    time.sleep(0.5)
+                    time.sleep(0.1)
 
         except Empty:
-            # periodic flush even if low traffic
             # periodic flush even if low traffic
             if batch:
                 try:

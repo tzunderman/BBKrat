@@ -110,7 +110,7 @@ def control():
         try:
             timestamp = 0
             while True:
-                while time.time_ns() - timestamp < (DT*1e6):
+                while time.time_ns() - timestamp < (DT*1e9):
                     time.sleep(0.001)
 
                 timestamp = time.time_ns()
@@ -151,7 +151,7 @@ def control():
 
                 # Apply a power slew rate, to gently ramp up when accelerating
                 # (Prevents broken wheel parts when quickly accelerating)
-                maxPowerInc = POWER_SLEWRATE * DT
+                maxPowerInc = round(POWER_SLEWRATE * DT)
                 powerLeft += clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc)
                 powerRight += clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc)
                 
@@ -233,6 +233,7 @@ def queue_serial_data(ser: serial.Serial):
                         "voltage": float(parts[2]),
                         "motor_1_current": float(parts[3]),
                         "motor_2_current": float(parts[4]),
+                        "vref": float(parts[5])
                     }
                 }
                 measurement_queue.put_nowait(measurement_arduino)
