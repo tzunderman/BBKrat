@@ -108,12 +108,13 @@ def control():
             print(f"Axes: {axes}  Buttons: {buttons}  Hats: {hats}", end='\r')
 
         try:
-            timestamp = 0
+            timestamp = 0.0
             while True:
-                while time.time_ns() - timestamp < (DT*1e9):
+                while time.monotonic() - timestamp < (DT):
+                    # 1us sleep
                     time.sleep(0.001)
 
-                timestamp = time.time_ns()
+                timestamp = time.monotonic()
                 # Handle events
                 for event in pygame.event.get():
                     if event.type == pygame.JOYDEVICEREMOVED:
@@ -201,12 +202,13 @@ def control():
                 except:
                     pass
 
-                # time.sleep(0.02)
         except RuntimeError as e:
             print(e)
             joystick.quit()
 
 def queue_serial_data(ser: serial.Serial):
+    last_error_queue = None
+
     while True:
         try:
             raw_bytes = ser.read_until()
@@ -238,6 +240,7 @@ def queue_serial_data(ser: serial.Serial):
                 }
                 measurement_queue.put_nowait(measurement_arduino)
                 measurement_queue.put_nowait(measurement_battery)
+                last_error_queue = None
                 
         except (ValueError, IndexError):
             # Ignore malformed serial lines
@@ -247,8 +250,10 @@ def queue_serial_data(ser: serial.Serial):
             break 
         except Full:
             # Ignore the measurement if the queue is full
-            print("Warning: Full Queue")
-            pass
+            now = time.monotonic()
+            if last_error_queue is None or (now - last_error_queue) > 2:
+                print("Warning: Full Queue")
+                last_error_queue = now
 
 
 if __name__ == '__main__': 
