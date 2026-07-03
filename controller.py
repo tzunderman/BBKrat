@@ -40,6 +40,8 @@ POWER_RAMP_TIME = 2.0
 # Maximum slew rate of power command (%/s), derived from ramp time
 POWER_SLEWRATE = 100.0 / POWER_RAMP_TIME
 
+
+
 R_WINDING   = 0.2   #ohm, winding resistance
 
 
@@ -327,7 +329,7 @@ def control():
 def queue_serial_data(ser: serial.Serial):
     last_error_queue = None
 
-    global Vbat, I_m1, I_m2, data_received
+    global Vbat, Ileft, Iright, data_received
 
     while True:
         try:
@@ -339,8 +341,8 @@ def queue_serial_data(ser: serial.Serial):
             parts = line.split()
 
             Vbat = float(parts[2])
-            I_m1 = float(parts[3])
-            I_m2 = float(parts[4])
+            Ileft = float(parts[3]) # Left = motor 1 in arduino code
+            Iright = float(parts[4])  # Right  motor 2 in arduino code
             data_received = True
             
             if len(parts) >= 4:
@@ -358,8 +360,8 @@ def queue_serial_data(ser: serial.Serial):
                     "time": time.time_ns(),
                     "fields": {
                         "voltage": Vbat,
-                        "motor_1_current": I_m1,
-                        "motor_2_current": I_m2,
+                        "motor_1_current": Ileft,
+                        "motor_2_current": Iright,
                         "vref": float(parts[5])
                     }
                 }
