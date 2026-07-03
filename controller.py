@@ -53,10 +53,6 @@ I_CLAMP     = 10.0  #A, current to clamp to
 I_UNCLAMP   = 6.0   #A, current to stop clamping at
 
 
-
-
-
-
 measurement_queue: Queue[dict[str, str | int | dict[str, float]]] = Queue(maxsize=256)
 
 
@@ -72,8 +68,8 @@ last_valid_I_t_right = -1.0 #s, timestamp when left motor had valid current last
 
 clamping_left = False
 clamping_right = False
-clamp_dir_left = 0.0
-clamp_dir_right = 0.0
+clamp_dir_left = 0
+clamp_dir_right = 0
 
 # Controller rumble state
 rumbling = False
@@ -91,17 +87,19 @@ def connect_arduino() -> serial.Serial:
             
             # Start reader thread here, ONLY ONCE per connection
             Thread(target=queue_serial_data, args=[ser], daemon=True).start()
+
+            print("Waiting for data...")
+            while not data_received:
+                time.sleep(0.5)
+
+            print("Data reception confirmed.")
+
             return ser
 
         time.sleep(0.5)
 
-        while not data_received:
-            print("Waiting for data...")
-            time.sleep(0.5)
 
-        print("Data reception confirmed.")
-
-def applyStallCurrentClamping(powerLeft, powerRight):
+def applyStallCurrentClamping(powerLeft: int, powerRight: int) -> tuple[int, int]:
 
     global last_valid_I_t_left, last_valid_I_t_right, clamping_left, clamping_right, clamp_dir_left, clamp_dir_right
 
@@ -145,17 +143,19 @@ def applyStallCurrentClamping(powerLeft, powerRight):
         clamping_right = False
 
 
+    powerLeftOut = powerLeft
     if clamping_left:
-        powerLeft = powerClamp * clamp_dir_left
+        powerLeftOut = powerClamp * clamp_dir_left
 
+    powerRightOut = powerRight
     if clamping_right:
-        powerRight = powerClamp * clamp_dir_right
+        powerRightOut = powerClamp * clamp_dir_right
 
 
-    return powerLeft, powerRight
+    return powerLeftOut, powerRightOut
 
 
-def set_rumble(joystick, shouldRumble):
+def set_rumble(joystick, shouldRumble: bool) -> None:
 
     global rumbling
 
@@ -256,14 +256,14 @@ def control():
                 steer = round(leftStickX * max_power)
                 
                 # Power for left and right motor (-100 to 100)
-                powerLeftReq = clamp(drive + steer, -100, 100)
-                powerRightReq = clamp(drive - steer, -100, 100)
+                powerLeftReq = round(clamp(drive + steer, -100, 100))
+                powerRightReq = round(clamp(drive - steer, -100, 100))
 
                 # Apply a power slew rate, to gently ramp up when accelerating
                 # (Prevents broken wheel parts when quickly accelerating)
                 maxPowerInc = round(POWER_SLEWRATE * DT)
-                powerLeft += clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc)
-                powerRight += clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc)
+                powerLeft += round(clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc))
+                powerRight += round(clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc))
 
                 #Apply overcurrent clamping logic
                 powerLeft, powerRight = applyStallCurrentClamping(powerLeft, powerRight)
