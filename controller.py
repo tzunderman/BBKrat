@@ -46,11 +46,11 @@ R_WINDING   = 0.2   #ohm, winding resistance
 
 
 # Stall current clamping settings
-I_PEAK      = 60.0  #A, limit where clamping starts immediately
-I_MAX_LIM   = 15.0  #A, limit where clamping starts after I_MAX_TIME
+I_PEAK      = 20.0  #A, limit where clamping starts immediately
+I_MAX_LIM   = 12.0  #A, limit where clamping starts after I_MAX_TIME
 I_MAX_TIME  = 0.50  #s, amount of time to allow exceeding I_MAX_LIM before clamping
-I_CLAMP     = 14.0  #A, current to clamp to
-I_UNCLAMP   = 10.0  #A, current to stop clamping at
+I_CLAMP     = 10.0  #A, current to clamp to
+I_UNCLAMP   = 6.0   #A, current to stop clamping at
 
 
 
