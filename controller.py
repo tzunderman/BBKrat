@@ -35,7 +35,7 @@ PRINT_MODE = False
 DT = 0.02
 
 # Time (s) to ramp power from 0 to 100 (full forward)
-POWER_RAMP_TIME = 2.0
+POWER_RAMP_TIME = 1.0
 
 # Maximum slew rate of power command (%/s), derived from ramp time
 POWER_SLEWRATE = 100.0 / POWER_RAMP_TIME
