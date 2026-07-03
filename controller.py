@@ -40,10 +40,43 @@ POWER_RAMP_TIME = 2.0
 # Maximum slew rate of power command (%/s), derived from ramp time
 POWER_SLEWRATE = 100.0 / POWER_RAMP_TIME
 
+R_WINDING   = 0.2   #ohm, winding resistance
+
+
+# Stall current clamping settings
+I_PEAK      = 60.0  #A, limit where clamping starts immediately
+I_MAX_LIM   = 15.0  #A, limit where clamping starts after I_MAX_TIME
+I_MAX_TIME  = 0.50  #s, amount of time to allow exceeding I_MAX_LIM before clamping
+I_CLAMP     = 14.0  #A, current to clamp to
+I_UNCLAMP   = 10.0  #A, current to stop clamping at
+
+
+
 
 
 
 measurement_queue: Queue[dict[str, str | int | dict[str, float]]] = Queue(maxsize=256)
+
+
+#Data from arduino
+data_received = False #Indicates if at least one data point has been received
+Vbat = 0.0 #V
+Ileft = 0.0 #A
+Iright = 0.0 #A
+
+# Stall clamping state variables
+last_valid_I_t_left = -1.0 #s, timestamp when left motor had valid current last time
+last_valid_I_t_right = -1.0 #s, timestamp when left motor had valid current last time
+
+clamping_left = False
+clamping_right = False
+clamp_dir_left = 0.0
+clamp_dir_right = 0.0
+
+# Controller rumble state
+rumbling = False
+
+
 
 def connect_arduino() -> serial.Serial:
     print("Try to connect to an Arduino")
@@ -57,30 +90,96 @@ def connect_arduino() -> serial.Serial:
             # Start reader thread here, ONLY ONCE per connection
             Thread(target=queue_serial_data, args=[ser], daemon=True).start()
             return ser
+
         time.sleep(0.5)
 
+        while not data_received:
+            print("Waiting for data...")
+            time.sleep(0.5)
+
+        print("Data reception confirmed.")
+
+def applyStallCurrentClamping(powerLeft, powerRight):
+
+    global last_valid_I_t_left, last_valid_I_t_right, clamping_left, clamping_right, clamp_dir_left, clamp_dir_right
+
+
+    U_CLAMP = R_WINDING * I_CLAMP
+    powerClamp = (U_CLAMP / Vbat)*100
+    powerClamp = clamp(powerClamp, 0, 100)
+
+
+    t_now = time.monotonic()
+
+
+    if last_valid_I_t_left < 0 or abs(Ileft) <= I_MAX_LIM:
+        last_valid_I_t_left = t_now
+
+    if last_valid_I_t_right < 0 or abs(Iright) <= I_MAX_LIM:
+        last_valid_I_t_right = t_now
+
+
+    t_exceed_left = t_now - last_valid_I_t_left
+    t_exceed_right = t_now - last_valid_I_t_right
+
+
+    if abs(Ileft) > I_PEAK or t_exceed_left > I_MAX_TIME:
+        clamping_left = True
+        clamp_dir_left = int(powerLeft / abs(powerLeft))
+
+    if abs(Iright) > I_PEAK or t_exceed_right > I_MAX_TIME:
+        clamping_right = True
+        clamp_dir_right = int(powerRight / abs(powerRight))
+
+
+
+    # Clamp exit conditions: commanded power lower than clamp power,
+    # or measured current lower than I_UNCLAMP
+
+    if abs(powerLeft) <= powerClamp or abs(Ileft) < I_UNCLAMP:
+        clamping_left = False
+
+    if abs(powerRight) <= powerClamp or abs(Iright) < I_UNCLAMP:
+        clamping_right = False
+
+
+    if clamping_left:
+        powerLeft = powerClamp * clamp_dir_left
+
+    if clamping_right:
+        powerRight = powerClamp * clamp_dir_right
+
+
+    return powerLeft, powerRight
+
+
+def set_rumble(joystick, shouldRumble):
+
+    global rumbling
+
+    if shouldRumble and not rumbling:
+        rumbling = joystick.rumble(1.0, 1.0, 300000)
+        if not rumbling:
+            print("Rumbling failed")
+
+    if rumbling and not shouldRumble:
+        joystick.stop_rumble()
+        rumbling = False
+
 def control():
-    # ---------------- Initial variable values ----------------
-    # Max power
-    max_power = 20  # 20% start
 
-    # # Prev button values
-    prev_shoulder_up = False
-    prev_shoulder_down = False
-    prev_dpad = 0
-
-    # ---------------- Init ----------------
-    ## ---------------- Serial connection ----------------
-    ser = None
-    if not PRINT_MODE:
-        ser = connect_arduino()
-
-    ## ---------------- Controller connection ----------------
+    ## Init controller libs
     # pygame.init()
     pygame.display.init()
     pygame.joystick.init()
 
     while True:
+
+        ## Init serial
+        ser = None
+        if not PRINT_MODE:
+            ser = connect_arduino()
+
         print("Waiting for controller...")
         while pygame.joystick.get_count() < 1:
             pygame.event.pump() # Must pump to detect new devices
@@ -89,6 +188,7 @@ def control():
         joystick = pygame.joystick.Joystick(0)
         joystick.init()
         print(f"Connected to: {joystick.get_name()}")
+        rumbling = False
 
         max_power = 20
         prev_shoulder_up = False
@@ -107,10 +207,17 @@ def control():
             hats = [joystick.get_hat(i) for i in range(joystick.get_numhats())]
             print(f"Axes: {axes}  Buttons: {buttons}  Hats: {hats}", end='\r')
 
+
+        #Startup rumble
+        set_rumble(joystick, True)
+        time.sleep(0.2)
+        set_rumble(joystick, False)
+
+        #Start main loop (in catchall block)
         try:
             timestamp = 0.0
             while True:
-                while time.monotonic() - timestamp < (DT):
+                while time.monotonic() - timestamp < DT:
                     # 1us sleep
                     time.sleep(0.001)
 
@@ -155,7 +262,10 @@ def control():
                 maxPowerInc = round(POWER_SLEWRATE * DT)
                 powerLeft += clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc)
                 powerRight += clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc)
-                
+
+                #Apply overcurrent clamping logic
+                powerLeft, powerRight = applyStallCurrentClamping(powerLeft, powerRight)
+
                 # Map -100..100 → 1..255
                 pwmLeft = max(1, round((powerLeft + 100) * 255 / 200))
                 pwmRight = max(1, round((powerRight + 100) * 255 / 200))
@@ -179,7 +289,12 @@ def control():
                     except serial.SerialException:
                         print("Lost connection to Arduino!")
                         ser.close()
-                        ser = connect_arduino()
+                        break
+
+                #Rumble controller if clamping
+                rumble = clamping_left or clamping_right
+                set_rumble(joystick, rumble)
+
                 
                 # ----- Queue data to be sent to Grafana -----
                 measurement_controller: dict[str, str | int | dict[str, float]] = {
@@ -195,6 +310,8 @@ def control():
                         "powerRight": powerRight,
                         "pwmLeft": pwmLeft,
                         "pwmRight": pwmRight,
+                        "clampingLeft": clamping_left,
+                        "clampingRight": clamping_right,
                     }
                 }
                 try:
@@ -205,9 +322,12 @@ def control():
         except RuntimeError as e:
             print(e)
             joystick.quit()
+            ser.close()
 
 def queue_serial_data(ser: serial.Serial):
     last_error_queue = None
+
+    global Vbat, I_m1, I_m2, data_received
 
     while True:
         try:
@@ -217,6 +337,11 @@ def queue_serial_data(ser: serial.Serial):
                 
             line = raw_bytes.decode('utf-8', errors='ignore').strip()
             parts = line.split()
+
+            Vbat = float(parts[2])
+            I_m1 = float(parts[3])
+            I_m2 = float(parts[4])
+            data_received = True
             
             if len(parts) >= 4:
                 # print(line, end='\r')
@@ -232,9 +357,9 @@ def queue_serial_data(ser: serial.Serial):
                     "measurement": "battery",
                     "time": time.time_ns(),
                     "fields": {
-                        "voltage": float(parts[2]),
-                        "motor_1_current": float(parts[3]),
-                        "motor_2_current": float(parts[4]),
+                        "voltage": Vbat,
+                        "motor_1_current": I_m1,
+                        "motor_2_current": I_m2,
                         "vref": float(parts[5])
                     }
                 }
