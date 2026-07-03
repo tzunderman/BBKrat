@@ -6,12 +6,15 @@
 #define MOTOR_1_CURRENT_PIN A13
 #define MOTOR_2_CURRENT_PIN A15
 
-#define MOTOR_1_PWM_1_PIN 10
-#define MOTOR_1_PWM_2_PIN 9
+#define MOTOR_1_PWM_1_PIN 12
+#define MOTOR_1_PWM_2_PIN 11
 #define MOTOR_1_PWM_ENABLE_PIN 8
-#define MOTOR_2_PWM_1_PIN 4
-#define MOTOR_2_PWM_2_PIN 3
+#define MOTOR_2_PWM_1_PIN 7
+#define MOTOR_2_PWM_2_PIN 6
 #define MOTOR_2_PWM_ENABLE_PIN 2
+
+#define CURRENT_SENSOR_1_OFFSET 0.95
+#define CURRENT_SENSOR_2_OFFSET -0.91
 
 // frequency =  16MHz / (2 * prescaleFactor *  (TOP + 1))
 // Correction, because Phase Correct PWM is used: 
@@ -105,8 +108,8 @@ void loop() {
   if (millis() - last_battery_status > battery_status_period) {
     vref = read_vcc();
     battery_voltage = read_voltage(BATTERY_VOLTAGE_PIN, vref);
-    motor_1_current = read_current(MOTOR_1_CURRENT_PIN, vref);
-    motor_2_current = read_current(MOTOR_2_CURRENT_PIN, vref);
+    motor_1_current = -read_current(MOTOR_1_CURRENT_PIN, vref) + CURRENT_SENSOR_1_OFFSET;
+    motor_2_current = -read_current(MOTOR_2_CURRENT_PIN, vref) + CURRENT_SENSOR_2_OFFSET;
     last_battery_status = millis();
   }
 
@@ -123,10 +126,10 @@ void loop() {
     }
 
     // Calculate the new count values for the received duty cycles
-    OCR1A = (uint16_t) ((float) TOP * (float) buf[0] / 255.0);
-    OCR1B = (uint16_t) ((float) TOP * (float) buf[0] / 255.0);
-    OCR4A = (uint16_t) ((float) TOP * (float) buf[1] / 255.0);
-    OCR4B = (uint16_t) ((float) TOP * (float) buf[1] / 255.0);
+    OCR1A = (uint16_t) ((float) TOP * (float) (255 - buf[0]) / 255.0);
+    OCR1B = (uint16_t) ((float) TOP * (float) (255 - buf[0]) / 255.0);
+    OCR4A = (uint16_t) ((float) TOP * (float) (255 - buf[1]) / 255.0);
+    OCR4B = (uint16_t) ((float) TOP * (float) (255 - buf[1]) / 255.0);
     
     // Send the calculated values back to the pi
     send_data(((float) TOP * (float) buf[0] / 255.0), ((float) TOP * (float) buf[1] / 255.0), battery_voltage, motor_1_current, motor_2_current, vref);
