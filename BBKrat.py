@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 import sys
 import time
 import signal
 from queue import Empty
-from threading import Thread
+from multiprocessing import Process, Queue
 from influxdb import InfluxDBClient
 
-from controller import control, measurement_queue
+from controller import control
 
 def graceful_shutdown(signum, frame):
     print("Caught termination signal. Exiting.")
@@ -18,12 +20,15 @@ signal.signal(signal.SIGINT, graceful_shutdown)
 client = InfluxDBClient(
     host='localhost',
     port=8086,
-    database='BBKrat'
+    database='BBKrat',
+    use_udp=True,
+    udp_port=8094
 )
 
+measurement_queue: Queue[dict[str, str | int | dict[str, float]]] = Queue(maxsize=2048)
 
 # ---------------- Thread setup ----------------
-def influx_writer():
+def influx_writer(queue: Queue[dict[str, str | int | dict[str, float]]]):  # FIX: Accept queue as a parameter
     batch: list[dict[str, str | int | dict[str, float]]] = []
     MAX_BATCH = 1000
     FLUSH_MIN = 200
@@ -36,13 +41,13 @@ def influx_writer():
     while True:
         try:
             # Wait for at least one point
-            metric = measurement_queue.get(timeout=1)
+            metric = queue.get(timeout=1)
             batch.append(metric)
 
-            # Drain whatever is available right now (catch-up mechanism)
+            # Drain whatever is available right now
             while len(batch) < MAX_BATCH:
                 try:
-                    batch.append(measurement_queue.get_nowait())
+                    batch.append(queue.get_nowait())
                 except Empty:
                     break
 
@@ -90,9 +95,9 @@ def influx_writer():
 # Thread for reading the controller, sending PWM values to the Arduino,
 # reading PWM and battery values from the Arduino queueing the
 # values to be uploaded to influxdb
-Thread(target=control, daemon=True).start()
+Process(target=control, args=[measurement_queue], daemon=True).start()
 # Uploading the values to influxdb
-Thread(target=influx_writer, daemon=True).start()
+Process(target=influx_writer, args=[measurement_queue], daemon=True).start()
 
 while True:
     time.sleep(1)

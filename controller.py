@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import time
 import pygame
 import serial
 import serial.tools.list_ports as stlp
-from queue import Queue, Full
+from queue import Full
 from threading import Thread
+from multiprocessing import Queue
+from typing import TypeVar
 
-def clamp(x, lo, hi):
+T = TypeVar('T')
+def clamp(x: T, lo: T, hi: T) -> T:
     return max(lo, min(x, hi))
 
 # ---------------- Constants -----------------
@@ -53,10 +58,7 @@ I_CLAMP     = 10.0  #A, current to clamp to
 I_UNCLAMP   = 6.0   #A, current to stop clamping at
 
 
-measurement_queue: Queue[dict[str, str | int | dict[str, float]]] = Queue(maxsize=256)
-
-
-#Data from arduino
+# Data from arduino
 data_received = False #Indicates if at least one data point has been received
 Vbat = 0.0 #V
 Ileft = 0.0 #A
@@ -76,7 +78,7 @@ rumbling = False
 
 
 
-def connect_arduino() -> serial.Serial:
+def connect_arduino(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]) -> serial.Serial:
     print("Try to connect to an Arduino")
     while True:
         arduinos = [port.device for port in stlp.comports() if port.manufacturer and "Arduino" in port.manufacturer]
@@ -86,14 +88,13 @@ def connect_arduino() -> serial.Serial:
             time.sleep(1) # Wait for Arduino reboot
             
             # Start reader thread here, ONLY ONCE per connection
-            Thread(target=queue_serial_data, args=[ser], daemon=True).start()
+            Thread(target=queue_serial_data, args=[ser, measurement_queue], daemon=True).start()
 
             print("Waiting for data...")
             while not data_received:
                 time.sleep(0.5)
 
             print("Data reception confirmed.")
-
             return ser
 
         time.sleep(0.5)
@@ -152,10 +153,10 @@ def applyStallCurrentClamping(powerLeft: int, powerRight: int) -> tuple[int, int
         powerRightOut = powerClamp * clamp_dir_right
 
 
-    return powerLeftOut, powerRightOut
+    return int(powerLeftOut), int(powerRightOut)
 
 
-def set_rumble(joystick, shouldRumble: bool) -> None:
+def set_rumble(joystick: pygame.joystick.JoystickType, shouldRumble: bool) -> None:
 
     global rumbling
 
@@ -168,7 +169,8 @@ def set_rumble(joystick, shouldRumble: bool) -> None:
         joystick.stop_rumble()
         rumbling = False
 
-def control():
+
+def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
 
     ## Init controller libs
     # pygame.init()
@@ -180,7 +182,7 @@ def control():
         ## Init serial
         ser = None
         if not PRINT_MODE:
-            ser = connect_arduino()
+            ser = connect_arduino(measurement_queue)
 
         print("Waiting for controller...")
         while pygame.joystick.get_count() < 1:
@@ -190,14 +192,13 @@ def control():
         joystick = pygame.joystick.Joystick(0)
         joystick.init()
         print(f"Connected to: {joystick.get_name()}")
-        rumbling = False
 
         max_power = 20
         prev_shoulder_up = False
         prev_shoulder_down = False
         prev_dpad = 0
 
-        #Commanded, slew-rated power per motor (from -100 to +100)
+        # Commanded, slew-rated power per motor (from -100 to +100)
         powerLeft = 0
         powerRight = 0
 
@@ -210,20 +211,23 @@ def control():
             print(f"Axes: {axes}  Buttons: {buttons}  Hats: {hats}", end='\r')
 
 
-        #Startup rumble
+        # Startup rumble
         set_rumble(joystick, True)
         time.sleep(0.2)
         set_rumble(joystick, False)
 
-        #Start main loop (in catchall block)
+        # Start main loop (in catchall block)
+        next_control_time = time.monotonic()
         try:
-            timestamp = 0.0
             while True:
-                while time.monotonic() - timestamp < DT:
-                    # 1us sleep
-                    time.sleep(0.001)
+                next_control_time += DT
+                now = time.monotonic()
+                if next_control_time > now:
+                    time.sleep(next_control_time - now)
+                else:
+                    # Loop fell behind schedule; catch up
+                    next_control_time = now
 
-                timestamp = time.monotonic()
                 # Handle events
                 for event in pygame.event.get():
                     if event.type == pygame.JOYDEVICEREMOVED:
@@ -265,7 +269,7 @@ def control():
                 powerLeft += round(clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc))
                 powerRight += round(clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc))
 
-                #Apply overcurrent clamping logic
+                # Apply overcurrent clamping logic
                 powerLeft, powerRight = applyStallCurrentClamping(powerLeft, powerRight)
 
                 # Map -100..100 → 1..255
@@ -293,7 +297,7 @@ def control():
                         ser.close()
                         break
 
-                #Rumble controller if clamping
+                # Rumble controller if clamping
                 rumble = clamping_left or clamping_right
                 set_rumble(joystick, rumble)
 
@@ -318,15 +322,17 @@ def control():
                 }
                 try:
                     measurement_queue.put_nowait(measurement_controller)
-                except:
+                except Full:
+                    # TODO log message?
                     pass
 
         except RuntimeError as e:
             print(e)
             joystick.quit()
-            ser.close()
+            if ser is not None:
+                ser.close()
 
-def queue_serial_data(ser: serial.Serial):
+def queue_serial_data(ser: serial.Serial, measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
     last_error_queue = None
 
     global Vbat, Ileft, Iright, data_received
@@ -339,14 +345,14 @@ def queue_serial_data(ser: serial.Serial):
                 
             line = raw_bytes.decode('utf-8', errors='ignore').strip()
             parts = line.split()
-
-            Vbat = float(parts[2])
-            Ileft = float(parts[3]) # Left = motor 1 in arduino code
-            Iright = float(parts[4])  # Right  motor 2 in arduino code
-            data_received = True
             
-            if len(parts) >= 4:
+            if len(parts) >= 6:
                 # print(line, end='\r')
+                Vbat = float(parts[2])
+                Ileft = float(parts[3]) # Left = motor 1 in arduino code
+                Iright = float(parts[4])  # Right  motor 2 in arduino code
+                data_received = True
+                
                 measurement_arduino: dict[str, str | int | dict[str, float]] = {
                     "measurement": "arduino",
                     "time": time.time_ns(),
@@ -383,5 +389,5 @@ def queue_serial_data(ser: serial.Serial):
                 last_error_queue = now
 
 
-if __name__ == '__main__': 
-    control()
+if __name__ == '__main__':
+    control(Queue(maxsize=2048))
