@@ -254,10 +254,11 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
 
                 # Clamp max power between 10% and 100%
                 max_power = clamp(max_power, 10, 100)
+                max_steer_power = clamps(0.5*max_power, 10, 100)
 
                 # Drive and steer signals, with max power applied, in percent
                 drive = round(-rightStickY * max_power)
-                steer = round(leftStickX * max_power)
+                steer = round(leftStickX * max_steer_power)
                 
                 # Power for left and right motor (-100 to 100)
                 powerLeftReq = round(clamp(drive + steer, -100, 100))
