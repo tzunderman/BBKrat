@@ -45,6 +45,14 @@ POWER_RAMP_TIME = 1.0
 # Maximum slew rate of power command (%/s), derived from ramp time
 POWER_SLEWRATE = 100.0 / POWER_RAMP_TIME
 
+# Power (0 to 100) defined as deadzone, in which motor does not move.
+DEADZONE_POWER_LEFT = 5
+DEADZONE_POWER_RIGHT = 5
+
+# Power (0 to 100) defined as off, values below this will be set to 0 output
+OFF_POWER_LEFT = 1
+OFF_POWER_RIGHT = 1
+
 
 
 R_WINDING   = 0.2   #ohm, winding resistance
@@ -269,6 +277,27 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
                 maxPowerInc = round(POWER_SLEWRATE * DT)
                 powerLeft += round(clamp(powerLeftReq - powerLeft, -maxPowerInc, maxPowerInc))
                 powerRight += round(clamp(powerRightReq - powerRight, -maxPowerInc, maxPowerInc))
+
+
+                # Deadzone removal logic. If we are in the range of +-5% power, the motor does not start moving.
+                # If we are in the deadzone, set value to +5%, 0%, or -5% based on the powerReq value.
+
+                if abs(powerLeft) < DEADZONE_POWER_LEFT:
+                    if abs(powerLeftReq) < OFF_POWER_LEFT:
+                        powerLeft = 0
+                    elif powerLeftReq >= OFF_POWER_LEFT:
+                        powerLeft = +DEADZONE_POWER_LEFT
+                    elif powerLeftReq <= -OFF_POWER_LEFT:
+                        powerLeft = -DEADZONE_POWER_LEFT
+
+                if abs(powerRight) < DEADZONE_POWER_RIGHT:
+                    if abs(powerRightReq) < OFF_POWER_RIGHT:
+                        powerRight = 0
+                    elif powerRightReq >= OFF_POWER_RIGHT:
+                        powerRight = +DEADZONE_POWER_RIGHT
+                    elif powerRightReq <= -OFF_POWER_RIGHT:
+                        powerRight = -DEADZONE_POWER_RIGHT
+
 
                 # Apply overcurrent clamping logic
                 powerLeft, powerRight = applyStallCurrentClamping(powerLeft, powerRight)
