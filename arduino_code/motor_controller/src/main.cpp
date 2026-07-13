@@ -13,8 +13,8 @@
 #define MOTOR_2_PWM_2_PIN 6
 #define MOTOR_2_PWM_ENABLE_PIN 2
 
-#define CURRENT_SENSOR_1_OFFSET 0.95
-#define CURRENT_SENSOR_2_OFFSET -0.91
+#define CURRENT_SENSOR_1_OFFSET 1.29
+#define CURRENT_SENSOR_2_OFFSET -0.60
 
 // frequency =  16MHz / (2 * prescaleFactor *  (TOP + 1))
 // Correction, because Phase Correct PWM is used: 
