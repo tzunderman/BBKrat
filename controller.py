@@ -7,13 +7,20 @@ import serial.tools.list_ports as stlp
 from queue import Full
 from threading import Thread
 from multiprocessing import Queue
-from typing import TypeVar
+from typing import TypeVar, Literal
+from RPi import GPIO
 
 T = TypeVar('T')
 def clamp(x: T, lo: T, hi: T) -> T:
     return max(lo, min(x, hi))
 
 # ---------------- Constants -----------------
+
+# Relay pins
+RELAY_1_PIN = 37
+RELAY_2_PIN = 35
+RELAY_3_PIN = 33
+RELAY_4_PIN = 31
 
 # Axes
 AXIS_L_STICK_X = 0
@@ -26,8 +33,9 @@ BTN_SHOULDER_UP = 5
 BTN_SHOULDER_DOWN = 4
 
 # D-pad buttons
+HAT_DPAD_X = 0
 HAT_DPAD_Y = 1
-
+BTN_RIGHT = 1
 
 # Demo mode to see which button index of the controller is what.
 BTN_INDEX_DEMO_MODE = False
@@ -187,6 +195,17 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
 
     while True:
 
+        ## Init GPIO
+        # This needs to be called before pins can be set. Also after GPIO.cleanup()
+        GPIO.setmode(GPIO.BOARD)
+
+        relay_pins: list[tuple[int, Literal[0, 1]]] = [(RELAY_1_PIN, GPIO.HIGH), (RELAY_2_PIN, GPIO.HIGH), (RELAY_3_PIN, GPIO.HIGH), (RELAY_4_PIN, GPIO.HIGH)]
+        for pin, level in relay_pins:
+            GPIO.setup(pin, GPIO.OUT, initial=level)
+
+        motor_on = False
+
+
         ## Init serial
         ser = None
         if not PRINT_MODE:
@@ -205,6 +224,10 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
         prev_shoulder_up = False
         prev_shoulder_down = False
         prev_dpad = 0
+        prev_dpad_left = 0
+        prev_button_right = False
+        dpad_left_rising = False
+        button_right_rising = False
 
         # Commanded, slew-rated power per motor (from -100 to +100)
         powerLeft = 0
@@ -247,6 +270,8 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
                 current_shoulder_up = joystick.get_button(BTN_SHOULDER_UP)
                 current_shoulder_down = joystick.get_button(BTN_SHOULDER_DOWN)
                 current_dpad = joystick.get_hat(0)[HAT_DPAD_Y]
+                current_dpad_left = joystick.get_hat(0)[HAT_DPAD_X]
+                current_button_right = joystick.get_button(BTN_RIGHT)
 
 
                 # ----- Process controller inputs -----
@@ -255,10 +280,31 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
                     max_power += 10
                 if current_shoulder_down and not prev_shoulder_down or current_dpad == -1 and prev_dpad != -1:
                     max_power -= 10
+                if current_dpad_left == -1 and prev_dpad_left != -1:
+                    dpad_left_rising = True
+                elif current_dpad_left != -1:
+                    dpad_left_rising = False
+                if current_button_right and not prev_button_right:
+                    button_right_rising = True
+                elif not current_button_right:
+                    button_right_rising = False
+
+                if dpad_left_rising and button_right_rising:
+                    dpad_left_rising = False
+                    button_right_rising = False
+                    motor_on = not motor_on
+                    
+                    motor_relay_pin = relay_pins[3]
+                    if motor_on:
+                        GPIO.output(motor_relay_pin[0], not bool(motor_relay_pin[1]))
+                    else:
+                        GPIO.output(motor_relay_pin[0], bool(motor_relay_pin[1]))
 
                 prev_shoulder_up = current_shoulder_up
                 prev_shoulder_down = current_shoulder_down
                 prev_dpad = current_dpad
+                prev_dpad_left = current_dpad_left
+                prev_button_right = current_button_right
 
                 # Clamp max power between 10% and 100%
                 max_power = clamp(max_power, 10, 100)
@@ -348,6 +394,7 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
                         "pwmRight": pwmRight,
                         "clampingLeft": clamping_left,
                         "clampingRight": clamping_right,
+                        "motorRelayOn": motor_on,
                     }
                 }
                 try:
@@ -361,6 +408,10 @@ def control(measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
             joystick.quit()
             if ser is not None:
                 ser.close()
+
+        for pin, level in relay_pins:
+            GPIO.output(pin, level)
+        GPIO.cleanup()
 
 def queue_serial_data(ser: serial.Serial, measurement_queue: Queue[dict[str, str | int | dict[str, float]]]):
     last_error_queue = None
